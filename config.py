@@ -1,6 +1,6 @@
 # config.py
 LOGIN = 415260060                 # your MT5 login
-PASSWORD = "Danny@0311"
+PASSWORD =
 SERVER = "Exness-MT5Trial14"     # example: "ICMarketsSC-Demo"
 TERMINAL_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"  # optional
 
