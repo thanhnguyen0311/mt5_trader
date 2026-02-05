@@ -1,0 +1,9 @@
+MetaTrader5
+pandas
+python-dotenv
+pytesseract
+pillow
+mss
+opencv-python
+pyautogui
+numpy
