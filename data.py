@@ -8,6 +8,7 @@ class OrderResponse:
     comment: str
     order: int = 0
     deal: int = 0
+    fill_price: float = 0.0
     request: Optional[Dict[str, Any]] = None
 
 
