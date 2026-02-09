@@ -177,7 +177,7 @@ def order_generator(
         lot: float,
         sl_price: float,
         *,
-        rr_targets=(1.0, 2.2, 3.5),  # TP1=1R, TP2=2R, TP3=3R
+        rr_targets=(1.25, 2.5, 4.0),  # TP1=1R, TP2=2R, TP3=3R
         deviation: int = 20,
         magic: int = 0,
         filling: Literal["FOK", "IOC", "RETURN"] = "IOC",

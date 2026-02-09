@@ -147,7 +147,7 @@ if __name__ == "__main__":
                         order_generator(
                             symbol="BTCUSDc",
                             sl_price=tempSL,
-                            lot=0.5
+                            lot=1
                         )
                         stopLoss = tempSL
                         entry = tempENTRY
@@ -158,7 +158,7 @@ if __name__ == "__main__":
                         order_generator(
                             symbol="XAUUSDc",
                             sl_price=tempSL,
-                            lot=0.25
+                            lot=0.5
                         )
                         stopLoss = tempSL
                         entry = tempENTRY
