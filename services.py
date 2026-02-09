@@ -220,10 +220,14 @@ def order_generator(
     # ---- 2) Áp giới hạn chênh lệch SL so với entry theo symbol ----
     max_diff: Optional[float] = None
     if "BTC" in sym_u:
-        max_diff = 400.0
-        sl = sl - 40.0
+        max_diff = 500.0
+        sl = sl - 30.0
     elif "XAU" in sym_u:
-        max_diff = 30.0
+        max_diff = 50.0
+        if side == "BUY":
+            sl = sl - 3
+        else:
+            sl = sl + 3
 
     if max_diff is not None:
         diff = abs(entry - sl)
