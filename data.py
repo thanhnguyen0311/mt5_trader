@@ -14,6 +14,9 @@ class OrderResponse:
 
 @dataclass
 class MT5Config:
+    lot : float
+    symbol: str
+    name: str
     login: int
     password: str
     server: str

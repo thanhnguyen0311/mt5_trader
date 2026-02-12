@@ -38,12 +38,16 @@ def extract_sl_number(text: str):
     pattern = r'SL\s*\((\d+)\.'
     match = re.search(pattern, text)
 
+    pattern2 = r'St\s*\((\d+)\.'
+    match2 = re.search(pattern2, text)
     if match:
         return match.group(1)
+    if match2:
+        return match2.group(1)
 
     return None
 
-def extract_ENTRY_number(text: str):
+def extract_entry_number(text: str):
     pattern = r'Entry\s*\((\d+)\.'
     match = re.search(pattern, text)
 
@@ -58,8 +62,8 @@ def validate_price(price: str):
         return False
 
 
-    minValue = 1000
-    maxValue = 150000
+    minValue = 4000
+    maxValue = 6000
 
     # Convert string to int and validate the range
     price_int = int(price)
@@ -72,30 +76,30 @@ def validate_price(price: str):
 
 
 if __name__ == "__main__":
-    cfg = MT5Config(
-        login=config.LOGIN,
-        password=config.PASSWORD,
-        server=config.SERVER,
-        terminal_path=r"C:\Program Files\MetaTrader 5\terminal64.exe",  # optional
-    )
 
+
+
+    # while True:
+    #     x, y = pyautogui.position()
+    #     print(f"X={x} Y={y}", end="\r")
+    #
 
 
     region = {
-        "left": 10,
-        "top": 170,
-        "width": 1200,
-        "height": 700
+        "left": 500,
+        "top": 150,
+        "width": 700,
+        "height": 720
     }
+
     entry = 0
     stopLoss = 0
-    connect_mt5(cfg)
 
 
     check = True
     while True:
 
-        move_sl_to_breakeven()
+        # move_sl_to_breakeven()
 
 
         with mss.mss() as sct:
@@ -109,24 +113,37 @@ if __name__ == "__main__":
             # grayscale
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
+            # blur nhẹ (RẤT nên thêm)
+            gray = cv2.GaussianBlur(gray, (3,3), 0)
+
             # threshold
-            gray = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)[1]
+            bw = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)[1]
+
+            # ✅ THÊM Ở ĐÂY
+            kernel = np.ones((2,2), np.uint8)
+            bw = cv2.morphologyEx(bw, cv2.MORPH_OPEN, kernel, iterations=1)
 
             # đọc toàn bộ text
             custom_config = r'--oem 3 --psm 6'
 
-            text = pytesseract.image_to_string(gray, config=custom_config)
+            text = pytesseract.image_to_string(bw, config=custom_config)
             # print(text)
             extracted_sl = extract_sl_number(text)
-            extracted_entry = extract_ENTRY_number(text)
+            extracted_entry = extract_entry_number(text)
 
 
             if validate_price(extracted_sl) and validate_price(extracted_entry):
+
                 tempSL = int(extracted_sl)
                 tempENTRY = int(extracted_entry)
 
 
                 if stopLoss != tempSL and entry != tempENTRY:
+                    print("SL : " + str(tempSL) + " ENTRY : " + str(tempENTRY))
+                    if abs(tempENTRY - tempSL) > 50:
+                        print("Wrong SL and ENTRY. Continue...")
+                        continue
+
                     if check :
                         check = False
                         print("SL : " + str(tempSL) + " ENTRY : " + str(tempENTRY))
@@ -134,38 +151,24 @@ if __name__ == "__main__":
                         stopLoss = tempSL
                         entry = tempENTRY
                         continue
-                    print("Stop Loss : " + str(tempSL) + " Entry : " + str(tempENTRY) + "")
-                    if mt5.positions_get():
-                        close_all_positions()
 
                     if not can_place_order():
                         print("Quá 5 lệnh trong 5 phút → skip")
                         break   # bỏ vòng này, không thoát bot
 
-                    if 150000 > int(tempSL) > 10000 and 150000> int(tempENTRY) > 10000:
-                        print("BTC")
-                        order_generator(
-                            symbol="BTCUSDc",
-                            sl_price=tempSL,
-                            lot=1
-                        )
-                        stopLoss = tempSL
-                        entry = tempENTRY
-                        continue
+                    connect_mt5(config.WORKERS[0])
+                    order_generator(
+                        symbol="XAUUSD",
+                        sl_price=tempSL,
+                        entry_price=tempENTRY,
+                        lot=1
+                    )
 
-                    if 1000 < int(tempSL) < 7000 and 1000 < int(tempENTRY) < 7000:
-                        print("XAU")
-                        order_generator(
-                            symbol="XAUUSDc",
-                            sl_price=tempSL,
-                            lot=0.5
-                        )
-                        stopLoss = tempSL
-                        entry = tempENTRY
-                        continue
+                    stopLoss = tempSL
+                    entry = tempENTRY
+                    continue
 
 
-            time.sleep(1)
 
 
 

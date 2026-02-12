@@ -3,7 +3,10 @@ import time
 from typing import Optional, Literal, List, Dict, Any
 import MetaTrader5 as mt5
 
+import config
+from config import WORKERS
 from data import OrderResponse
+from integration import connect_mt5, disconnect_mt5
 
 Side = Literal["BUY", "SELL"]
 
@@ -176,18 +179,26 @@ def order_generator(
         symbol: str,
         lot: float,
         sl_price: float,
+        entry_price: float,
         *,
-        rr_targets=(1.25, 2.5, 4.0),  # TP1=1R, TP2=2R, TP3=3R
+        rr_targets=(1, 2, 3),  # TP1=1R, TP2=2R, TP3=3R
         deviation: int = 20,
         magic: int = 0,
         filling: Literal["FOK", "IOC", "RETURN"] = "IOC",
 ) -> Dict[str, Any]:
+
+
+
+
+
     """
     - Nếu sl < entry => BUY, else SELL
     - Tạo 3 lệnh market (TP1/TP2/TP3), SL giống nhau
     - Retry ngay lập tức cho tới khi khớp (DONE)
     """
     sl = float(sl_price)
+    desired_entry = float(entry_price)
+
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         return {
@@ -214,20 +225,79 @@ def order_generator(
 
     mid = last if last > 0 else (ask + bid) / 2.0
     # side dựa trên SL so với giá hiện tại (mid)
-    side: Side = "BUY" if sl < mid else "SELL"
+    side: Side = "BUY" if sl < entry_price else "SELL"
+    print(f"Side: {side}")
     # entry thật dùng ask/bid theo side
     entry = ask if side == "BUY" else bid
+
+
+
+    start = time.time()
+    last_tick = None
+
+
+    # ---- (A) Wait gate: chờ giá về vùng hợp lệ trong 10 phút ----
+    timeout_sec = 10 * 60
+    poll_sec = 3
+    eps = 1e-9
+    while True:
+        tick = mt5.symbol_info_tick(symbol)
+        last_tick = tick
+        if tick is None:
+            return {
+                "ok": False,
+                "error": f"symbol_info_tick failed for {symbol}: {mt5.last_error()}",
+                "side": side,
+                "orders": [],
+                "tps": [],
+            }
+
+        ask = float(getattr(tick, "ask", 0.0) or 0.0)
+        bid = float(getattr(tick, "bid", 0.0) or 0.0)
+
+        if ask <= 0 or bid <= 0:
+            return {
+                "ok": False,
+                "error": f"Invalid tick prices for {symbol}: ask={ask}, bid={bid}",
+                "side": side,
+                "orders": [],
+                "tps": [],
+            }
+
+        entry = ask if side == "BUY" else bid  # ✅ giá hiện tại dùng để vào market
+
+        # ✅ điều kiện bạn yêu cầu
+        if side == "BUY":
+            ok_to_trade = entry <= (desired_entry + 0.0 + eps)
+        else:  # SELL
+            ok_to_trade = entry >= (desired_entry + 2.0 - eps)
+
+        if ok_to_trade:
+            print("OK to trade!")
+            break  # ✅ đạt điều kiện -> đi tiếp
+
+        if time.time() - start >= timeout_sec:
+            return {
+                "ok": False,
+                "error": (
+                    f"Skip {symbol}: price not in range within 5 minutes. "
+                    f"side={side}, desired_entry={desired_entry}, current_entry={entry}"
+                ),
+                "side": side,
+                "orders": [],
+                "tps": [],
+            }
+        print("Finding entry price... Target: ", desired_entry, "Current: ", entry, "Side: ", side, end="")
+        time.sleep(poll_sec)
+
     # ---- 2) Áp giới hạn chênh lệch SL so với entry theo symbol ----
     max_diff: Optional[float] = None
-    if "BTC" in sym_u:
-        max_diff = 500.0
-        sl = sl - 30.0
-    elif "XAU" in sym_u:
-        max_diff = 50.0
-        if side == "BUY":
-            sl = sl - 3
-        else:
-            sl = sl + 3
+
+    max_diff = 15.0
+    if side == "BUY":
+        sl = sl - 1
+    else:
+        sl = sl + 1
 
     if max_diff is not None:
         diff = abs(entry - sl)
@@ -241,8 +311,17 @@ def order_generator(
 
             print(f"⚠️ SL too far for {symbol}: {diff:.2f} > {max_diff:.2f}  -> Adjust SL {old_sl} -> {sl}")
 
+
+
+
     # ---- 3) Tính R và TP ----
-    r = abs(entry - sl)
+
+    if abs(entry_price - sl_price) < 20:
+        r = abs(entry_price - sl_price)
+    else :
+        r = abs(entry - sl)
+
+    print(f"R: {r}")
     if r <= 0:
         return {
             "ok": False,
@@ -251,52 +330,62 @@ def order_generator(
             "orders": [],
             "tps": [],
         }
-    side: Side = "BUY" if sl < entry else "SELL"
+
     # TP theo R-multiple từ entry
+
     if side == "BUY":
-        tps = [entry + r * float(m) for m in rr_targets]
+        tps = [entry + (r * float(m)) for m in rr_targets]
     else:
-        tps = [entry - r * float(m) for m in rr_targets]
+        tps = [entry - (r * float(m)) for m in rr_targets]
 
     lot_each = float(lot)
 
     orders: List[OrderResponse] = []
     all_ok = True
     fill_prices: List[float] = []
+    disconnect_mt5()
 
+    for worker in WORKERS:
+        print("Starting orders.... Account: ", worker.name, "")
 
-    for i, tp in enumerate(tps, start=1):
-        resp = _retry_place_until_ok(
-            symbol=symbol,
-            side=side,
-            lot=lot_each,
-            sl=sl,
-            tp=float(tp),
-            deviation=deviation,
-            magic=magic,
-            comment=f"TP{i}",
-            filling=filling,
-            retry_delay_sec=0.0,
-        )
-        orders.append(resp)
+        connect_mt5(worker)
 
-        if resp.ok:
-            fp = float(getattr(resp, "fill_price", 0.0) or 0.0)
-            fill_prices.append(fp)
-            print(f"✅ FILLED {symbol} | {side} | TP{i} | lot={lot_each} | Entry={fp} | SL={sl} | TP={tp}")
-        else:
-            all_ok = False
-            print(f"❌ FAILED {symbol} | {side} | TP{i} | retcode={resp.retcode} | {resp.comment}")
-            break
+        close_all_positions()
+
+        for i, tp in enumerate(tps, start=1):
+            resp = _retry_place_until_ok(
+                symbol=worker.symbol,
+                side=side,
+                lot=worker.lot,
+                sl=sl,
+                tp=float(tp),
+                deviation=deviation,
+                magic=magic,
+                comment=f"TP{i}",
+                filling=filling,
+                retry_delay_sec=0.0,
+            )
+            orders.append(resp)
+
+            if resp.ok:
+                fp = float(getattr(resp, "fill_price", 0.0) or 0.0)
+                fill_prices.append(fp)
+                print(f"✅ FILLED {symbol} | {side} | TP{i} | lot={lot_each} | Entry={fp} | SL={sl} | TP={tp}")
+            else:
+                all_ok = False
+                print(f"❌ FAILED {symbol} | {side} | TP{i} | retcode={resp.retcode} | {resp.comment}")
+                break
+
+        disconnect_mt5()
 
     # Nếu cả 3 lệnh đều ok -> in tổng kết
-    if all_ok and len(fill_prices) == 3:
-        entry_avg = sum(fill_prices) / 3.0
+    if all_ok and len(fill_prices) == 9:
+        entry_avg = sum(fill_prices) / 9.0
         print("\n================= ORDER SUMMARY =================")
         print(f"✅ Symbol : {symbol}")
         print(f"✅ Side   : {side}")
         print(f"✅ SL     : {sl}")
-        print(f"✅ Entry  : {entry_avg}   (avg of 3 fills)")
+        print(f"✅ Entry  : {entry_avg}   (avg of 9 fills)")
         print(f"✅ TP1    : {tps[0]}")
         print(f"✅ TP2    : {tps[1]}")
         print(f"✅ TP3    : {tps[2]}")
